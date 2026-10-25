@@ -1,0 +1,64 @@
+{
+  "name": "acme-hybrid-estate",
+  "description": "Illustrative mid-size enterprise used by examples and tests: hybrid AD, a VPN edge, a build server, an S3 bucket holding deployment keys, and an internal AI agent wired to MCP servers.",
+  "controls": [
+    {
+      "id": "mfa-vpn",
+      "name": "MFA on VPN portal",
+      "kind": "mfa",
+      "effective": true,
+      "defeated_by": "cred:oauth-token",
+      "notes": "Enforced for all staff; vendor accounts exempt until Q3 migration."
+    },
+    {
+      "id": "edr-fleet",
+      "name": "EDR on servers",
+      "kind": "edr",
+      "effective": false,
+      "defeated_by": "exec:local-admin",
+      "notes": "Agent present but in detect-only mode on 30% of fleet."
+    },
+    {
+      "id": "seg-dmz",
+      "name": "DMZ segmentation",
+      "kind": "segmentation",
+      "effective": true
+    }
+  ],
+  "nodes": [
+    {"id": "internet", "name": "Internet", "kind": "internet", "criticality": 1, "exposure": "open", "impact": "low", "owner": "n/a"},
+    {"id": "vpn", "name": "VPN Gateway", "kind": "host", "criticality": 3, "exposure": "open", "impact": "partial", "owner": "network-team", "controls": ["mfa-vpn"], "tags": ["edge"]},
+    {"id": "legacy-jump", "name": "Legacy Jump Host", "kind": "host", "criticality": 3, "exposure": "controlled", "impact": "partial", "owner": "infra", "tags": ["tech-debt"], "cves": ["CVE-2026-1111"]},
+    {"id": "build01", "name": "Build Server", "kind": "host", "criticality": 3, "exposure": "controlled", "impact": "partial", "owner": "platform", "tags": ["ci"], "cves": ["CVE-2026-2222"]},
+    {"id": "deploy-keys", "name": "Deployment Keys (S3)", "kind": "datastore", "criticality": 4, "exposure": "small", "impact": "total", "owner": "platform"},
+    {"id": "svc-ci", "name": "svc-ci Service Account", "kind": "identity", "criticality": 4, "exposure": "small", "impact": "total", "owner": "platform"},
+    {"id": "fileserver", "name": "File Server", "kind": "host", "criticality": 2, "exposure": "small", "impact": "partial", "owner": "infra"},
+    {"id": "ad-dc", "name": "Domain Controller", "kind": "host", "criticality": 5, "exposure": "small", "impact": "total", "owner": "identity-team", "tags": ["tier0"]},
+    {"id": "agent", "name": "Internal Ops Agent", "kind": "agent", "criticality": 3, "exposure": "controlled", "impact": "partial", "owner": "ai-platform", "tags": ["mcp"]},
+    {"id": "mcp-shell", "name": "MCP Shell Server", "kind": "control", "criticality": 4, "exposure": "small", "impact": "total", "owner": "ai-platform", "tags": ["mcp"]},
+    {"id": "hr-db", "name": "HR Database", "kind": "datastore", "criticality": 5, "exposure": "small", "impact": "total", "owner": "data-team"}
+  ],
+  "edges": [
+    {"src": "internet", "dst": "vpn", "kind": "network", "technique": "exploit public VPN appliance", "precondition": {"all_of": []}, "grants": ["net:reach"]},
+    {"src": "vpn", "dst": "legacy-jump", "kind": "network", "technique": "VPN-authenticated pivot", "control": "mfa-vpn", "precondition": {"all_of": ["net:reach"]}, "grants": ["net:reach"]},
+    {"src": "legacy-jump", "dst": "fileserver", "kind": "network", "technique": "SMB + harvested local hash", "precondition": {"all_of": ["exec:shell"]}, "grants": ["net:smb"]},
+    {"src": "legacy-jump", "dst": "build01", "kind": "credential", "technique": "cached build credentials on jump host", "precondition": {"all_of": ["exec:shell"]}, "grants": ["cred:hash"]},
+    {"src": "build01", "dst": "deploy-keys", "kind": "credential", "technique": "CI secrets readable from build agent", "precondition": {"all_of": ["cred:hash"]}, "grants": ["cred:cloud-key"]},
+    {"src": "build01", "dst": "svc-ci", "kind": "identity", "technique": "service principal token from CI runner", "precondition": {"all_of": ["exec:shell"]}, "grants": ["cred:oauth-token"]},
+    {"src": "svc-ci", "dst": "ad-dc", "kind": "identity", "technique": "over-scoped service account with Tier-0 rights", "precondition": {"all_of": ["cred:oauth-token"]}, "grants": ["id:tier0"]},
+    {"src": "fileserver", "dst": "ad-dc", "kind": "trust", "technique": "unconstrained delegation", "precondition": {"all_of": ["id:domain-user"]}, "grants": ["id:tier0"]},
+    {"src": "legacy-jump", "dst": "agent", "kind": "agentic", "technique": "agent reachable on internal chat channel", "precondition": {"all_of": ["net:reach"]}, "grants": ["agent:prompt-inject"]},
+    {"src": "agent", "dst": "mcp-shell", "kind": "agentic", "technique": "MCP tool description poisoning -> tool invoke", "precondition": {"all_of": ["agent:prompt-inject"]}, "grants": ["agent:tool-invoke", "exec:code"]},
+    {"src": "mcp-shell", "dst": "hr-db", "kind": "network", "technique": "shell tool has unrestricted egress to data subnet", "precondition": {"all_of": ["exec:code"]}, "grants": ["secret:read"]},
+    {"src": "vpn", "dst": "ad-dc", "kind": "network", "technique": "flat management VLAN reaches Tier-0 interfaces", "precondition": {"all_of": ["net:reach"]}, "grants": ["net:mgmt-plane"], "confidence": "inferred"}
+  ],
+  "findings": [
+    {"id": "F-001", "asset": "legacy-jump", "cve": "CVE-2026-1111", "title": "Unauthenticated RCE in legacy SSH daemon", "cvss": 9.8, "epss": 0.62, "kev": true, "patch_available": false, "exploit_maturity": "weaponized", "grants": ["exec:shell"], "source": "scanner"},
+    {"id": "F-002", "asset": "build01", "cve": "CVE-2026-2222", "title": "Jenkins plugin path traversal", "cvss": 8.1, "epss": 0.11, "kev": false, "patch_available": true, "exploit_maturity": "functional", "grants": ["exec:shell"], "source": "scanner"},
+    {"id": "F-003", "asset": "vpn", "cve": "CVE-2026-3333", "title": "VPN appliance auth bypass", "cvss": 9.1, "epss": 0.28, "kev": false, "patch_available": true, "exploit_maturity": "proof", "grants": ["cred:oauth-token"], "source": "scanner"},
+    {"id": "F-004", "asset": "hr-db", "cve": "CVE-2026-4444", "title": "Postgres privilege escalation", "cvss": 7.2, "epss": 0.004, "kev": false, "patch_available": true, "exploit_maturity": "proof", "source": "scanner"},
+    {"id": "F-005", "asset": "agent", "title": "Ops agent accepts unauthenticated chat input with shell tool in scope", "cvss": 8.8, "epss": null, "kev": false, "patch_available": false, "exploit_maturity": "functional", "source": "manual-review"},
+    {"id": "F-006", "asset": "fileserver", "cve": "CVE-2023-5555", "title": "SMB signing not enforced", "cvss": 6.5, "epss": 0.02, "kev": false, "patch_available": true, "exploit_maturity": "proof", "source": "scanner"},
+    {"id": "F-007", "asset": "deploy-keys", "title": "Bucket policy allows svc-ci full read", "cvss": 5.0, "epss": null, "kev": false, "patch_available": false, "exploit_maturity": "unknown", "source": "cloud-posture"}
+  ]
+}
