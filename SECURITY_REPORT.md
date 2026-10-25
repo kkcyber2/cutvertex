@@ -9,7 +9,7 @@
 
 | Dimension | Weight | Score | Basis |
 |---|---|---|---|
-| Correctness of model | 25 | 23 | 45 tests; three real semantic bugs found and fixed during development |
+| Correctness of model | 25 | 23 | 45 tests; eight real bugs found and fixed, three of them semantic |
 | Test coverage | 15 | 14 | 45 tests over 4 modules; adversarial and hostile-input cases included |
 | Input safety | 15 | 14 | Validation-first ingest; escaping for HTML embedding; bounded search |
 | Dependency hygiene | 10 | 9 | 3 runtime deps; no CVEs on project deps |
@@ -25,7 +25,9 @@ probabilistic reasoning. Those are scope boundaries, not defects — but they ar
 
 ## 2. Verification executed
 
-All commands run in a fresh venv on Python 3.11.
+Every command below was run against a **fresh clone of the published repository** into a new
+virtualenv — not against a working tree. All results reproduced from
+`git clone https://github.com/kkcyber2/cutvertex`.
 
 ### Static analysis — ruff
 
@@ -42,7 +44,7 @@ Two scoped ignores, both justified and commented in `pyproject.toml`:
 | Ignore | File | Justification |
 |---|---|---|
 | `S105, S106` | `model.py`, `tests/` | The capability vocabulary contains strings like `secret:read` and `cred:oauth-token`. These are capability *identifiers*, not credentials. |
-| `E501` | `report_html.py` | Embedded JavaScript template string; wrapping it would obscure the code. |
+| `E501` | `report_html.py` | Embedded CSS/JavaScript template strings; wrapping them would obscure the code. |
 
 ### Security static analysis — bandit
 
@@ -90,11 +92,11 @@ No private keys, no cloud credentials, no tokens. The repository contains no `.e
 
 - `LICENSE`: proprietary "All Rights Reserved" text, not an OSI-approved permissive license.
   Deliberate — see the user's requirement.
-- All 8 Python modules carry `Copyright (c) 2026 kk (kkdev9715). All Rights Reserved.`
+- All 10 Python modules carry `Copyright (c) 2026 kk (kkdev9715). All Rights Reserved.`
 - No third-party source code copied. All logic is original. The algorithms implemented are
   public-domain techniques (BFS, SSVC decision tree, EPSS/KEV scoring); the *implementation*
   and the precondition-set model are original work.
-- Copyright headers: 8 / 8 Python files.
+- Copyright headers: 10 / 10 Python files.
 
 ### Test suite
 
@@ -117,6 +119,31 @@ Coverage by area:
 | Chokepoints / what-if | 2 | broken-path counts, 100% reduction after removal |
 | Example estate | 3 | parses, has a realizable path, serialises |
 | Hostile input | 8 | malformed JSON, missing file, missing keys, bad enum, bad CVE, out-of-range CVSS, cycle, 200-node graph |
+
+### End-to-end, from the clean clone
+
+```
+$ cutvertex --version
+cutvertex 0.1.0
+
+$ cutvertex assess examples/acme-estate.json --out reports/r.json --html reports/r.html
+CutVertex 0.1.0 — examples/acme-estate.json
+  graph          11 nodes / 12 edges
+  entry points   2   crown jewels 5
+  paths          4 (4 realizable)
+  exposure index 84.85/100
+  findings       7  [act 1, attend 3]
+  json written: reports/r.json
+  html written: reports/r.html
+```
+
+`what-if` counterfactual, removing the single inbound edge:
+
+```json
+{"before": {"paths": 4, "risk": 322.0},
+ "after":  {"paths": 0, "risk": 0},
+ "delta":  {"paths_removed": 4, "risk_removed": 322.0, "risk_reduction_pct": 100.0}}
+```
 
 ---
 
@@ -153,6 +180,24 @@ creates parents; `OSError` is caught and reported with exit code 3.
 the backend emits the key `"priority_track*"`. The distribution bar silently omitted the
 `track*` tier. Fix: bracket access. Caught by rendering and inspecting the DOM in Chromium.
 
+**B7 — Report renderer shipped outside the package.** `report_html.py` was committed at the
+repository root while `cli.py` imported `cutvertex.report_html`, so a fresh `pip install -e .`
+followed by `cutvertex assess --html` raised `ImportError`. Caught by cloning the repository
+into a clean venv and running the console script — not by the test suite, which imported from
+the working tree. Fix: the module now lives inside the package; the root copy is a shim that
+re-exports it, so there is exactly one implementation.
+
+**B8 — Parse-error handler was itself broken.** The report's JSON-parse `catch` wrote to
+`document.getElementById('app')`, an element that does not exist in the rendered document, and
+did it with `innerHTML`. A corrupt payload therefore threw a second error instead of reporting
+the first, and the `innerHTML` path contradicted the module's own "never innerHTML" guarantee
+documented in its docstring. Fix: build the notice with `textContent` and insert it into
+`.wrap`.
+
+B7 and B8 were both found by verifying the *published* artifact rather than the working tree.
+That is the lesson worth keeping: a green test suite says the local code works, not that the
+shipped package does.
+
 ---
 
 ## 4. Adversarial testing
@@ -174,8 +219,9 @@ Attempts made to break the tool, and the outcome:
 | Missing output directory | Handled, exit 3 with a clear message. ✅ |
 | Deep trust chain (100 hops) | Bounded at `max_hops`; reports what it explored rather than hanging. ⚠️ Some valid long paths truncated by design, documented as a limitation. |
 
-Rendered in headless Chromium at 1280×1600: 5 KPI cards, 8 chokepoint cards, 7 finding rows,
-4 path cards, **zero console errors**, zero page errors.
+Verified in headless Chromium at 1280×1600 from the clean clone: 5 KPI cards, 8 chokepoint
+cards, 7 finding rows, 4 path cards, 3 distribution bar segments, **zero console errors, zero
+page errors**.
 
 ---
 
@@ -220,13 +266,16 @@ gated-path reporting; agent/MCP coverage; self-hosting with no third-party data 
 
 ## 7. Reproduction
 
+Every figure in this report comes from these commands, run against a clean clone:
+
 ```bash
+git clone https://github.com/kkcyber2/cutvertex && cd cutvertex
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check .
 .venv/bin/bandit -c pyproject.toml -r cutvertex
 .venv/bin/pip-audit
-.venv/bin/cutvertex assess examples/acme-estate.json --html reports/report.html
+.venv/bin/cutvertex assess examples/acme-estate.json --out reports/r.json --html reports/r.html
 ```
 
 ---
