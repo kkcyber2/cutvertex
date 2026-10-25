@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.bandit-cache/
+
+# Runtime output
+*.db
+*.sqlite3
+.cache/
+reports/
+!examples/reports/
+.env
+.env.*
