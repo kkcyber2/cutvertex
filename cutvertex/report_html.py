@@ -125,17 +125,23 @@ _JS = r"""
 (function(){
   var raw = document.getElementById('cv-data').textContent;
   var d;
-  try { d = JSON.parse(raw); } catch(e){
-    document.getElementById('app').innerHTML =
-      '<div class="note err">Report payload could not be parsed: ' +
-      String(e.message).replace(/[<>&]/g,'') + '</div>';
-    return;
-  }
+
   function el(tag, cls, txt){
     var n = document.createElement(tag);
     if(cls) n.className = cls;
     if(txt !== undefined && txt !== null) n.textContent = String(txt);
     return n;
+  }
+
+  // Parse failure must report in place, not throw a second error. Built with
+  // textContent (never innerHTML) so a hostile payload cannot become markup.
+  try { d = JSON.parse(raw); } catch(e){
+    var host = document.querySelector('.wrap') || document.body;
+    host.insertBefore(
+      el('div','note err','Report payload could not be parsed: ' + String(e.message)),
+      host.firstChild
+    );
+    return;
   }
   function pill(p){
     var s = String(p||'track');
