@@ -62,6 +62,9 @@ cutvertex validate examples/acme-estate.json
 
 # Counterfactual: what happens if we close exactly this edge?
 cutvertex what-if examples/acme-estate.json --remove "internet->vpn"
+
+# Bound the analysis: fail fast instead of pinning a CPU on a pathological graph
+cutvertex assess examples/acme-estate.json --timeout 30   # seconds; 0 disables
 ```
 
 Example output from the bundled estate:
@@ -90,6 +93,9 @@ assessment = assess(document=load_document("examples/acme-estate.json"))
 print(assessment.exposure_index)
 for cp in assessment.chokepoints[:3]:
     print(cp.edge, cp.paths_broken, cp.cost_hint)
+
+# Wall-clock budget (seconds); raises AnalysisTimeout when exceeded
+assessment = assess(document=load_document("examples/acme-estate.json"), timeout=30)
 ```
 
 ---

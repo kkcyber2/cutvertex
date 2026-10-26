@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
 
+from cutvertex.deadline import Deadline
 from cutvertex.model import (
     AttackPath,
     Chokepoint,
@@ -195,6 +196,7 @@ def enumerate_paths(
     targets: Iterable[str] | None = None,
     stop_at_first_target: bool = False,
     allow_gaps: bool = False,
+    deadline: Deadline | None = None,
 ) -> list[AttackPath]:
     """Enumerate satisfiable attacker paths from entry points to crown jewels.
 
@@ -218,6 +220,10 @@ def enumerate_paths(
         this True lets such edges be traversed with the missing capability
         recorded as a residual gap — useful for "if an insider already held X,
         what opens up?" analysis. Gated paths score lower by design.
+    deadline:
+        Optional wall-clock budget. When supplied, the search checks it as it
+        expands states and raises :class:`~cutvertex.deadline.AnalysisTimeout`
+        once exhausted, so a pathological graph cannot pin a CPU indefinitely.
     """
     if max_hops < 1:
         raise GraphError("max_hops must be >= 1")
@@ -237,6 +243,7 @@ def enumerate_paths(
                 max_hops=max_hops,
                 stop_at_first_target=stop_at_first_target,
                 allow_gaps=allow_gaps,
+                deadline=deadline,
             )
         )
         if len(results) >= max_paths * 4:
@@ -254,6 +261,7 @@ def _explore_from(
     max_hops: int,
     stop_at_first_target: bool,
     allow_gaps: bool = False,
+    deadline: Deadline | None = None,
 ) -> list[AttackPath]:
     # Frontier stores (node, held, path_steps, cumulative_weight, visited).
     start_held: frozenset[str] = frozenset()
@@ -267,6 +275,8 @@ def _explore_from(
     best_held: dict[str, list[frozenset[str]]] = defaultdict(list)
 
     while frontier:
+        if deadline is not None:
+            deadline.tick()
         st = frontier.popleft()
         # Local compromise: standing on a node with an exploitable finding lets
         # the attacker own it and gain its grants without consuming a hop. This
@@ -439,6 +449,7 @@ def rank_chokepoints(
     paths: Iterable[AttackPath],
     *,
     top_n: int = 10,
+    deadline: Deadline | None = None,
 ) -> list[Chokepoint]:
     """Rank single-edge remediations by real risk weight removed.
 
@@ -459,6 +470,8 @@ def rank_chokepoints(
 
     ranked: list[Chokepoint] = []
     for key, affected in edge_paths.items():
+        if deadline is not None:
+            deadline.tick()
         broken = sum(p.score for p in affected)  # removing this edge kills all of them
         residual_paths = len(path_list) - len(affected)
         edge = next(e for e in graph.out_edges(key[0]) if e.dst == key[1])

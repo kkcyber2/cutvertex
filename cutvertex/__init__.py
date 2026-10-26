@@ -3,6 +3,7 @@
 Copyright (c) 2026 kk (kkdev9715). All Rights Reserved. Proprietary — see LICENSE.
 """
 
+from cutvertex.deadline import AnalysisTimeout, Deadline
 from cutvertex.model import (
     AttackPath,
     Capability,
@@ -25,11 +26,13 @@ __version__ = "0.1.0"
 __author__ = "kk (kkdev9715)"
 
 __all__ = [
+    "AnalysisTimeout",
     "AttackPath",
     "Capability",
     "Chokepoint",
     "Confidence",
     "Control",
+    "Deadline",
     "Edge",
     "EdgeKind",
     "Exposure",

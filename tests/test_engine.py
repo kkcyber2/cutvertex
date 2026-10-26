@@ -9,9 +9,12 @@ Copyright (c) 2026 kk (kkdev9715). All Rights Reserved.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from cutvertex.analysis import assess, what_if
+from cutvertex.deadline import AnalysisTimeout, Deadline
 from cutvertex.graph import EnvironmentGraph, GraphError, enumerate_paths, rank_chokepoints
 from cutvertex.ingest.loader import IngestError, build_environment, load_document
 from cutvertex.model import (
@@ -511,3 +514,84 @@ class TestHostileInput:
         assert len(paths) <= 50
         for p in paths:
             assert p.hops <= 10
+
+
+# --------------------------------------------------------------------------
+# Wall-clock timeout
+# --------------------------------------------------------------------------
+
+
+class TestTimeout:
+    def test_disabled_deadline_never_raises(self):
+        d = Deadline(None)
+        for _ in range(1000):
+            d.tick()
+        assert not d.enabled
+        assert d.remaining is None
+        assert not d.expired()
+
+    def test_non_positive_budget_rejected(self):
+        with pytest.raises(ValueError):
+            Deadline(0)
+        with pytest.raises(ValueError):
+            Deadline(-1.0)
+
+    def test_deadline_raises_once_budget_exhausted(self):
+        t = [0.0]
+        d = Deadline(5.0, clock=lambda: t[0])
+        d.tick()  # elapsed 0 -> fine
+        t[0] = 6.0
+        with pytest.raises(AnalysisTimeout):
+            d.tick()
+
+    def test_elapsed_and_remaining_track_the_clock(self):
+        t = [0.0]
+        d = Deadline(10.0, clock=lambda: t[0])
+        t[0] = 4.0
+        assert d.elapsed == 4.0
+        assert d.remaining == 6.0
+        assert not d.expired()
+
+    def test_enumeration_honours_an_expired_deadline(self):
+        t = [0.0]
+        d = Deadline(1.0, clock=lambda: t[0])
+        t[0] = 999.0  # budget blown before the search starts
+        with pytest.raises(AnalysisTimeout):
+            enumerate_paths(_simple_graph(), deadline=d)
+
+    def test_assess_threads_a_deadline_into_enumeration(self, monkeypatch):
+        import cutvertex.analysis as an
+
+        seen: dict = {}
+        real = an.enumerate_paths
+
+        def spy(graph, **kw):
+            seen["deadline"] = kw.get("deadline")
+            return real(graph, **kw)
+
+        monkeypatch.setattr(an, "enumerate_paths", spy)
+        an.assess(document=load_document("examples/acme-estate.json"), timeout=30.0)
+        assert isinstance(seen["deadline"], Deadline)
+        assert seen["deadline"].enabled
+
+    def test_cli_exits_4_on_timeout(self, monkeypatch, tmp_path):
+        import cutvertex.cli as cli
+
+        doc = tmp_path / "estate.json"
+        doc.write_text(
+            json.dumps({"nodes": [{"id": "a", "kind": "host"}], "edges": []}),
+            encoding="utf-8",
+        )
+
+        def boom(*_a, **_k):
+            raise AnalysisTimeout("analysis exceeded the 1s wall-clock budget")
+
+        monkeypatch.setattr(cli, "assess", boom)
+        assert cli.main(["assess", str(doc)]) == 4
+
+    def test_cli_timeout_flag_zero_disables(self):
+        from cutvertex.cli import _timeout_arg
+
+        assert _timeout_arg(0) is None
+        assert _timeout_arg(-5) is None
+        assert _timeout_arg(60.0) == 60.0

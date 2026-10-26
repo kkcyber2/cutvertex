@@ -102,8 +102,8 @@ No private keys, no cloud credentials, no tokens. The repository contains no `.e
 
 ```
 $ pytest
-.............................................                            [100%]
-45 passed
+.............................................................            [100%]
+53 passed
 ```
 
 Coverage by area:
@@ -119,6 +119,7 @@ Coverage by area:
 | Chokepoints / what-if | 2 | broken-path counts, 100% reduction after removal |
 | Example estate | 3 | parses, has a realizable path, serialises |
 | Hostile input | 8 | malformed JSON, missing file, missing keys, bad enum, bad CVE, out-of-range CVSS, cycle, 200-node graph |
+| Wall-clock timeout | 8 | disabled deadline never raises; non-positive budget rejected; budget exhaustion raises; elapsed/remaining tracking; enumeration honours an expired deadline; `assess` threads a deadline through; CLI exits 4 on timeout; `--timeout 0` disables |
 
 ### End-to-end, from the clean clone
 
@@ -231,13 +232,45 @@ page errors**.
 |---|---|---|
 | No authentication layer (library/CLI only) | Low | By design; no network surface is exposed by default |
 | JSON payload embedded in HTML report | Low | Escaped for `<`, `>`, `&`, U+2028, U+2029; DOM built without `innerHTML` |
-| Maliciously crafted graph causing CPU exhaustion | Moderate | Bounded by `max_hops`, `max_paths`, `MAX_STATES_PER_NODE`, 32 MB file cap; no wall-clock timeout yet |
+| Maliciously crafted graph causing CPU exhaustion | Moderate | **Fixed.** Bounded by `max_hops`, `max_paths`, `MAX_STATES_PER_NODE`, 32 MB file cap, **and a wall-clock deadline** (`--timeout`, default 60 s) enforced inside the search and ranking loops. Exceeding it raises `AnalysisTimeout` and the CLI exits 4 with a clear message. See §4.1 |
 | Inventory poisoning producing misleading rankings | Moderate | `confidence` on every node/edge, surfaced in output; not yet enforced as a filter |
 | Build-time supply chain | Low | 3 runtime deps, pinned ranges; CI should pin `pip`/`setuptools` per §2 |
+| Account-level 2FA on the publishing GitHub account | Moderate | **Requires owner action.** GitHub exposes `two_factor_authentication` as a *read-only* field on `GET /user`; there is no API to enable it. Verified `false` on 2026-10-26. The account owner must enable it manually — see §4.2 |
 
-**Not fixed, deliberately:** no wall-clock execution timeout. On a dense estate, a
-pathological graph could still take a long time. A production deployment should wrap analysis
-in a timeout at the process level. Recorded here rather than quietly ignored.
+### 4.1 Wall-clock timeout (was: not fixed, deliberately)
+
+Earlier revisions of this report recorded the absence of a wall-clock timeout as accepted
+residual risk. That is now closed. `cutvertex.deadline.Deadline` carries a monotonic budget
+through `enumerate_paths` and `rank_chokepoints`; the engine ticks it as it expands states
+and raises `AnalysisTimeout` once the budget is spent. The budget is configurable via
+`--timeout` (default 60 s; `0` disables) and via the `timeout=` argument on `assess()` and
+`what_if()`. The clock is injectable, so the timeout path is tested deterministically rather
+than by sleeping.
+
+```
+$ cutvertex assess examples/acme-estate.json --timeout 0.0000001
+error: analysis exceeded the 1e-07s wall-clock budget; raise --timeout or reduce the estate size
+$ echo $?
+4
+```
+
+### 4.2 Two-factor authentication on the publishing account
+
+**Status: requires owner action — not fixable programmatically.**
+
+`GET /user` returns `two_factor_authentication: false` for `kkcyber2` (verified
+2026-10-26). GitHub's REST API exposes this field as **read-only**: there is no endpoint that
+enables 2FA, by design, because enabling it requires proving possession of a second factor.
+No tool — including this one — can turn it on. It must be done by the account owner:
+
+1. Sign in to GitHub as `kkcyber2`.
+2. **Settings → Password and authentication → Two-factor authentication → Enable**.
+3. Choose **Authenticator app** (recommended) or a security key; scan the QR code.
+4. **Save the recovery codes** somewhere offline — losing both device and codes locks the
+   account out, and GitHub Support cannot bypass 2FA.
+5. Confirm `two_factor_authentication` flips to `true` on the next `GET /user`.
+
+This is recorded as an open, owner-owned item rather than an ambiguous note.
 
 ---
 

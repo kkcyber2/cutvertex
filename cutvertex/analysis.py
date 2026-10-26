@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from cutvertex.deadline import Deadline
 from cutvertex.graph import EnvironmentGraph, enumerate_paths, rank_chokepoints
 from cutvertex.ingest.loader import build_environment, merge_enrichment
 from cutvertex.model import AttackPath, Chokepoint, Finding, Priority
@@ -104,9 +105,16 @@ def assess(
     max_hops: int = 8,
     max_paths: int = 500,
     top_chokepoints: int = 10,
+    timeout: float | None = None,
 ) -> Assessment:
-    """Run the full pipeline and return an :class:`Assessment`."""
+    """Run the full pipeline and return an :class:`Assessment`.
+
+    ``timeout`` is a wall-clock budget in seconds for the search and ranking
+    stages. When exceeded, :class:`~cutvertex.deadline.AnalysisTimeout` is
+    raised rather than letting a pathological graph run unbounded.
+    """
     warnings: list[str] = []
+    deadline = Deadline(timeout)
 
     if graph is None:
         if document is None:
@@ -120,7 +128,9 @@ def assess(
     structural = graph.validate()
     warnings.extend(structural)
 
-    paths = enumerate_paths(graph, max_hops=max_hops, max_paths=max_paths)
+    paths = enumerate_paths(
+        graph, max_hops=max_hops, max_paths=max_paths, deadline=deadline
+    )
     if not paths and not structural:
         warnings.append(
             "no attacker path reaches a crown jewel under the modelled preconditions "
@@ -128,7 +138,9 @@ def assess(
         )
 
     prioritized = prioritize(findings, dict(graph.nodes), paths)
-    chokepoints = rank_chokepoints(graph, paths, top_n=top_chokepoints)
+    chokepoints = rank_chokepoints(
+        graph, paths, top_n=top_chokepoints, deadline=deadline
+    )
 
     return Assessment(
         generated_at=datetime.now(timezone.utc),
@@ -148,13 +160,14 @@ def what_if(
     remove_edge: tuple[str, str] | None = None,
     disable_control: str | None = None,
     max_hops: int = 8,
+    timeout: float | None = None,
 ) -> dict:
     """Re-run analysis under a hypothetical remediation and report the delta.
 
     This is what makes a chokepoint recommendation falsifiable: an engineer can
     see exactly how many paths survive before committing to the change.
     """
-    before = enumerate_paths(graph, max_hops=max_hops)
+    before = enumerate_paths(graph, max_hops=max_hops, deadline=Deadline(timeout))
     before_risk = sum(p.score for p in before)
 
     kept_nodes = list(graph.nodes.values())
@@ -171,7 +184,7 @@ def what_if(
     for c in graph.controls.values():
         after_graph.register_control(c)
 
-    after = enumerate_paths(after_graph, max_hops=max_hops)
+    after = enumerate_paths(after_graph, max_hops=max_hops, deadline=Deadline(timeout))
     after_risk = sum(p.score for p in after)
     return {
         "before": {"paths": len(before), "risk": round(before_risk, 2)},
